@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sleep-kit-psg"
+version = "0.2.0"
+description = "A modular PSG preprocessing framework for multi-dataset standardization."
+authors = [
+  { name="Li Jinyang", email="jinyang03702@163.com" },
+]
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "numpy",
+    "mne>=1.0",
+    "matplotlib",
+    "scikit-learn",
+    "tqdm",
+    "h5py",
+    "scipy",
+    "pyyaml"
+]
+
+[project.scripts]
+sleepkit-process = "sleep_kit.cli:main"
+sleepkit-analyze = "sleep_kit.analyze:main"
