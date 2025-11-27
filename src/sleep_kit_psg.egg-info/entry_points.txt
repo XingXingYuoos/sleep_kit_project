@@ -1,3 +1,0 @@
-[console_scripts]
-sleepkit-analyze = sleep_kit.analyze:main
-sleepkit-process = sleep_kit.cli:main

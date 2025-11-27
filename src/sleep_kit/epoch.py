@@ -1,23 +1,56 @@
 """
 sleep_kit.epoch
-切片与序列化。
-Source: data_preparation.py
+===============
+
+Epoch slicing, normalization, and sequence packaging utilities.
+
+This module implements the core preprocessing steps used across SleepKit:
+1. Cut continuous multichannel PSG signals into fixed-length epochs.
+2. Apply per-subject standardization.
+3. Package epochs into fixed-length sequences for downstream modeling.
+
+The functions here provide minimal assumptions and are dataset-agnostic.
 """
+
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 
+
+# ----------------------------------------------------------------------
+# Epoch slicing
+# ----------------------------------------------------------------------
+
 def slice_epochs(signal, labels, fs=100, epoch_sec=30):
     """
-    将信号 (C, T_total) 和 标签 (N_epochs) 对齐并切片。
+    Slice continuous PSG signals into fixed-length epochs.
+
+    Parameters
+    ----------
+    signal : ndarray, shape (C, T_total)
+        Multichannel PSG signal, where C is the number of channels and
+        T_total is the number of samples.
+    labels : list or ndarray
+        List of epoch-level sleep stage labels.
+    fs : int, optional
+        Sampling rate in Hz. Default is ``100``.
+    epoch_sec : int, optional
+        Epoch duration in seconds. Default is ``30``.
+
+    Returns
+    -------
+    epochs_data : ndarray, shape (N, C, T_epoch)
+        Sliced epochs, where N is the number of valid epochs.
+    labels : ndarray, shape (N,)
+        Truncated and aligned labels.
     """
     C, L = signal.shape
     samples_per_epoch = int(fs * epoch_sec)
     n_epochs = L // samples_per_epoch
 
-    # 截断信号
+    # Truncate signal to full epochs
     signal = signal[:, :n_epochs * samples_per_epoch]
 
-    # 对齐标签
+    # Align labels
     if len(labels) < n_epochs:
         n_epochs = len(labels)
         signal = signal[:, :n_epochs * samples_per_epoch]
@@ -27,25 +60,44 @@ def slice_epochs(signal, labels, fs=100, epoch_sec=30):
     if n_epochs == 0:
         return None, None
 
-    # Reshape: (C, N, T_epoch) -> (N, C, T_epoch)
+    # Reshape to (N, C, T_epoch)
     epochs_data = signal.reshape(C, n_epochs, samples_per_epoch).transpose(1, 0, 2)
     labels = np.array(labels)
 
-    # 原始代码中的 Unknown 过滤逻辑 (Stage 5)
-    # delete ? before and after sleep
-    # known_idx = np.where(labels != 5)[0] ...
-    # 这里保留全部，让用户在下游清洗，或者你可以取消注释下面的过滤逻辑
-
+    # Note: Unknown stage (5) filtering is intentionally omitted for flexibility.
     return epochs_data, labels
+
+
+# ----------------------------------------------------------------------
+# Per-subject standardization
+# ----------------------------------------------------------------------
 
 def standardize_epochs(epochs_data):
     """
-    Z-score per subject.
-    Source: data_preparation.py
+    Apply per-subject Z-score normalization across all epochs.
+
+    Parameters
+    ----------
+    epochs_data : ndarray, shape (N, C, T)
+        Epoch data to be standardized.
+
+    Returns
+    -------
+    ndarray
+        Standardized epoch data with the same shape.
+
+    Notes
+    -----
+    - Standardization is applied across all epochs and time samples for each
+      channel independently.
+    - Transformation: (value - mean) / std
     """
-    if epochs_data is None: return None
+    if epochs_data is None:
+        return None
+
     N, C, T = epochs_data.shape
-    if N == 0: return epochs_data
+    if N == 0:
+        return epochs_data
 
     # Reshape to (N*T, C)
     data_reshaped = epochs_data.transpose(0, 2, 1).reshape(-1, C)
@@ -53,24 +105,52 @@ def standardize_epochs(epochs_data):
     scaler = StandardScaler()
     data_scaled = scaler.fit_transform(data_reshaped)
 
-    # Restore
+    # Restore original shape
     return data_scaled.reshape(N, T, C).transpose(0, 2, 1)
+
+
+# ----------------------------------------------------------------------
+# Sequence packaging
+# ----------------------------------------------------------------------
 
 def package_sequences(epochs, labels, seq_len=20):
     """
-    Source: data_preparation.py
+    Group epochs into fixed-length sequences.
+
+    Parameters
+    ----------
+    epochs : ndarray, shape (N, C, T)
+        Epoch-level data.
+    labels : ndarray, shape (N,)
+        Corresponding epoch labels.
+    seq_len : int, optional
+        Number of epochs per sequence. Default is ``20``.
+
+    Returns
+    -------
+    seq_data : ndarray, shape (N_seq, seq_len, C, T)
+        Packaged epoch sequences.
+    seq_labels : ndarray, shape (N_seq, seq_len)
+        Corresponding label sequences.
+
+    Notes
+    -----
+    - Sequences shorter than ``seq_len`` are discarded.
+    - The function performs simple truncation rather than sliding windows.
     """
-    if epochs is None: return None, None
+    if epochs is None:
+        return None, None
+
     N = epochs.shape[0]
     n_seq = N // seq_len
 
-    if n_seq == 0: return None, None
+    if n_seq == 0:
+        return None, None
 
-    # Trim
+    # Truncate to full sequences
     epochs = epochs[:n_seq * seq_len]
     labels = labels[:n_seq * seq_len]
 
-    # Reshape (N_seq, Seq_len, C, T)
     seq_data = epochs.reshape(n_seq, seq_len, epochs.shape[1], epochs.shape[2])
     seq_labels = labels.reshape(n_seq, seq_len)
 

@@ -1,144 +1,224 @@
 """
 sleep_kit.utils
-辅助工具：处理通道名称的匹配与标准化。
+===============
+
+Utility helpers for channel-name normalization and matching.
+
+This module provides robust channel-name inference utilities designed
+for heterogeneous PSG datasets where channel naming conventions vary
+significantly across centers. It supports:
+
+- Exact-matching against dataset-specific channel tables
+- Automatic channel inference (when no mapping table is provided)
+- Flexible, substring-based matching while excluding false positives
 """
 
-def find_str_in_list(expect: str, chList: list):
+# ----------------------------------------------------------------------
+# Helper: substring channel search
+# ----------------------------------------------------------------------
+
+def find_str_in_list(expect: str, ch_list: list):
     """
-    Helper function to find a channel name in a list, excluding 'SPO2' false positives.
-    Source: read_data.py
+    Find the index of a channel name that contains the expected substring.
+
+    Parameters
+    ----------
+    expect : str
+        Expected substring (case-insensitive).
+    ch_list : list of str
+        List of normalized or raw channel names.
+
+    Returns
+    -------
+    int or None
+        Index of the matching channel, or None if not found.
+
+    Notes
+    -----
+    - Channels containing 'SPO2' are ignored to avoid false positive matches.
+    - Used heavily by automatic channel inference logic.
     """
-    for ch in chList:
+    for idx, ch in enumerate(ch_list):
         if (expect in ch) and ('SPO2' not in ch):
-            return chList.index(ch)
+            return idx
     return None
+
+
+# ----------------------------------------------------------------------
+# Automatic channel inference (fallback)
+# ----------------------------------------------------------------------
 
 def get_auto_chn_names(rawChns):
     """
-    当没有预设配置表时，尝试自动推断通道名称。
-    Source: read_data.py getChnNames()
-    """
-    # normalized ch names
-    rawChns = [s for s in rawChns if 'LEG' not in s]
-    rawChns_norm = [''.join(char for char in s if char.isalnum()).upper() for s in rawChns]
+    Automatically infer canonical channel names when no mapping table is provided.
 
-    # result
+    Parameters
+    ----------
+    rawChns : list of str
+        Raw channel names as found in the PSG file.
+
+    Returns
+    -------
+    dict
+        Dictionary mapping canonical names:
+        {'F3','F4','C3','C4','O1','O2','E1','E2','EMG','EMGref',...}
+        to their matched raw channel names.
+
+    Notes
+    -----
+    - This method normalizes channel names by removing non-alphanumeric characters
+      and converting to uppercase.
+    - Reference channels (M1/M2/A1/A2) are inferred heuristically.
+    - Logic is adapted directly from original ``read_data.py``.
+    """
+    # Remove leg channels
+    rawChns = [s for s in rawChns if 'LEG' not in s]
+
+    # Normalize (remove non-alphanumeric)
+    raw_norm = [''.join(char for char in s if char.isalnum()).upper() for s in rawChns]
+
     chnNames = {}
     indRef = True
 
-    # EEG
+    # --------------------------------------------------------------
+    # EEG channels (F3/F4/C3/C4/O1/O2)
+    # --------------------------------------------------------------
     for ee in ['F3', 'F4', 'C3', 'C4', 'O1', 'O2']:
-        ref_cand = ['M2', 'A2'] if ee[-1] == '3' or ee[-1] == '1' else ['M1', 'A1']
-        # with ref first
-        index_M = find_str_in_list(ee + ref_cand[0], rawChns_norm)
-        index_A = find_str_in_list(ee + ref_cand[1], rawChns_norm)
+        ref_cand = ['M2', 'A2'] if ee[-1] in ('3', '1') else ['M1', 'A1']
+
+        index_M = find_str_in_list(ee + ref_cand[0], raw_norm)
+        index_A = find_str_in_list(ee + ref_cand[1], raw_norm)
+
         if index_M is not None:
             chnNames[ee] = rawChns[index_M]
             indRef = False
         elif index_A is not None:
             chnNames[ee] = rawChns[index_A]
             indRef = False
-        else:  # this channel with no ref
-            index_EEG = find_str_in_list(ee, rawChns_norm)
+        else:
+            index_EEG = find_str_in_list(ee, raw_norm)
             if index_EEG is not None:
                 chnNames[ee] = rawChns[index_EEG]
-                if indRef:
-                    index_A1 = find_str_in_list('A1', rawChns_norm)
-                    if index_A1 is not None:
-                        chnNames['M2'] = rawChns[index_A1]
-                    index_A2 = find_str_in_list('A2', rawChns_norm)
-                    if index_A2 is not None:
-                        chnNames['M2'] = rawChns[index_A2]
-                    index_M1 = find_str_in_list('M1', rawChns_norm)
-                    if index_M1 is not None:
-                        chnNames['M1'] = rawChns[index_M1]
-                    index_M2 = find_str_in_list('M2', rawChns_norm)
-                    if index_M2 is not None:
-                        chnNames['M2'] = rawChns[index_M2]
 
-    # EOG
+                if indRef:
+                    # Infer reference channels
+                    for suffix in ['A1', 'A2', 'M1', 'M2']:
+                        idx = find_str_in_list(suffix, raw_norm)
+                        if idx is not None:
+                            chnNames.setdefault('M2', rawChns[idx])
+
+    # --------------------------------------------------------------
+    # EOG channels (E1/E2)
+    # --------------------------------------------------------------
     for ee in ['E1', 'E2']:
-        ref_cand = ['M', 'A']
-        # with ref first
-        index_M = find_str_in_list(ee + ref_cand[0], rawChns_norm)
-        index_A = find_str_in_list(ee + ref_cand[1], rawChns_norm)
+        index_M = find_str_in_list(ee + 'M', raw_norm)
+        index_A = find_str_in_list(ee + 'A', raw_norm)
+
         if index_M is not None:
             chnNames[ee] = rawChns[index_M]
-        elif index_A is not None:
+            continue
+        if index_A is not None:
             chnNames[ee] = rawChns[index_A]
-        else:  # this channel with no ref
-            if ee == 'E1':
-                default_names = ('E1', 'LOC', 'EOG1', 'EOGL', 'LEOG')
-            elif ee == 'E2':
-                default_names = ('E2', 'ROC', 'EOG2', 'EOGR', 'REOG')
-            else:
-                default_names = () # Should not happen
+            continue
 
-            for name in default_names:
-                index_EOG = find_str_in_list(name, rawChns_norm)
-                if index_EOG is not None:
-                    chnNames[ee] = rawChns[index_EOG]
-                    break
+        defaults = {
+            'E1': ('E1', 'LOC', 'EOG1', 'EOGL', 'LEOG'),
+            'E2': ('E2', 'ROC', 'EOG2', 'EOGR', 'REOG')
+        }
+        for name in defaults.get(ee, []):
+            index_EOG = find_str_in_list(name, raw_norm)
+            if index_EOG is not None:
+                chnNames[ee] = rawChns[index_EOG]
+                break
 
-    # EMG
+    # --------------------------------------------------------------
+    # EMG channels
+    # --------------------------------------------------------------
     index_EMG = None
-    for emg in ('CHIN1', 'LCHIN', 'CHINL', 'CCHIN', 'CHINC', 'CHIN', 'EMG'):  # NOTE: priority
-        index_EMG = find_str_in_list(emg, rawChns_norm)
-        if index_EMG is not None:
-            chnNames['EMG'] = rawChns[index_EMG]
+    for emg in ('CHIN1', 'LCHIN', 'CHINL', 'CCHIN', 'CHINC', 'CHIN', 'EMG'):
+        idx = find_str_in_list(emg, raw_norm)
+        if idx is not None:
+            chnNames['EMG'] = rawChns[idx]
+            index_EMG = idx
             break
 
-    # try to find EMGref
-    if (index_EMG is not None) and rawChns_norm[index_EMG].count('CHIN') < 2 and rawChns_norm[index_EMG].count('EMG') < 2:
-        # Avoid modifying the list while iterating logic from original code,
-        # but here we just look for another channel
+    # EMG reference detection
+    if (index_EMG is not None and
+        raw_norm[index_EMG].count('CHIN') < 2 and
+        raw_norm[index_EMG].count('EMG') < 2):
+
         for emgref in ('CHIN2', 'CHIN3', 'RCHIN', 'CHINR', 'CHIN'):
-            index_EMGref = find_str_in_list(emgref, rawChns_norm)
-            # Ensure it's not the same channel
-            if index_EMGref is not None and index_EMGref != index_EMG:
-                chnNames['EMGref'] = rawChns[index_EMGref]
+            idx = find_str_in_list(emgref, raw_norm)
+            if idx is not None and idx != index_EMG:
+                chnNames['EMGref'] = rawChns[idx]
                 break
 
     return chnNames
 
+
+# ----------------------------------------------------------------------
+# Expected-channel lookup via configuration table
+# ----------------------------------------------------------------------
+
 def get_expected_chn_names(chnNameTable, rawChns):
     """
-    根据配置表查找通道。
-    Source: read_data.py getExpectedChnNames()
+    Retrieve canonical channel mapping from a configuration table.
+
+    Parameters
+    ----------
+    chnNameTable : dict
+        Per-dataset mapping rule (from config).
+    rawChns : list of str
+        Raw channel names found in the PSG file.
+
+    Returns
+    -------
+    dict
+        Dictionary of canonical → matched raw name.
+
+    Notes
+    -----
+    - Performs case-insensitive matching.
+    - Applies fallback substitution (e.g., F3 → F4) if expected channels
+      are missing.
+    - Logic faithfully follows ``read_data.py`` to maintain compatibility.
     """
     chnNames = {}
-    expect = ['F3', 'F4', 'C3', 'C4', 'O1', 'O2', 'E1', 'E2', 'EMG', 'M1', 'M2', 'EMGref']
-    for c in expect:
+    expected = ['F3', 'F4', 'C3', 'C4', 'O1', 'O2',
+                'E1', 'E2', 'EMG', 'M1', 'M2', 'EMGref']
+
+    for c in expected:
         found = False
+
         names = chnNameTable[c] if c in chnNameTable else []
-        names = [names] if type(names) is str else list(names)
-        names.append(c)  # default channel name
+        names = [names] if isinstance(names, str) else list(names)
+        names.append(c)  # default
+
         for name in names:
             for rcn in rawChns:
                 if name.upper() == rcn.upper():
                     chnNames[c] = rcn
                     found = True
                     break
-            if found: break
+            if found:
+                break
 
-    # del exist ref
+    # Remove incorrect references
     for ref in ('M1', 'M2'):
         if ref in chnNames:
             for c in ('F3', 'F4', 'C3', 'C4', 'O1', 'O2', 'E1', 'E2'):
-                if (c in chnNames) and (chnNames[ref] in chnNames[c]):
+                if c in chnNames and chnNames[ref] in chnNames[c]:
                     del chnNames[ref]
                     break
-    # replace alternative channel if ["F4, C4, O2, EMG"] not exist. BUG: replace ref
-    if ('F4' not in chnNames) and ('F3' in chnNames):
-        chnNames['F4'] = chnNames['F3']
-        del chnNames['F3']
-    if ('C4' not in chnNames) and ('C3' in chnNames):
-        chnNames['C4'] = chnNames['C3']
-        del chnNames['C3']
-    if ('O2' not in chnNames) and ('O1' in chnNames):
-        chnNames['O2'] = chnNames['O1']
-        del chnNames['O1']
-    if ('EMG' not in chnNames) and ('EMGref' in chnNames):
-        chnNames['EMG'] = chnNames['EMGref']
-        del chnNames['EMGref']
+
+    # Fallback replacement rules
+    if 'F4' not in chnNames and 'F3' in chnNames:
+        chnNames['F4'] = chnNames.pop('F3')
+    if 'C4' not in chnNames and 'C3' in chnNames:
+        chnNames['C4'] = chnNames.pop('C3')
+    if 'O2' not in chnNames and 'O1' in chnNames:
+        chnNames['O2'] = chnNames.pop('O1')
+    if 'EMG' not in chnNames and 'EMGref' in chnNames:
+        chnNames['EMG'] = chnNames.pop('EMGref')
+
     return chnNames
